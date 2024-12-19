@@ -1,0 +1,474 @@
+*0
+
+MUY=7405                      / EAE MULTIPLY INSTUCTTION
+CHGCNT=-150                   / AVERAGE TIME TO WAIT BEFORE CHANGING DISPLAY
+MQCHCT=-200                   / DITTO FOR MQ DISPLAY
+WAITCT=-40                    / TIMES TO RUN ROUND WAIT LOOP
+ICTAC=-100                    / AVERAGE TIME FOR AC MOVEMENT
+ICTMQ=-150                    / AVERAGETIME FOR MQ MOVEMENT
+ICTLK=-200                    / AVERAGE TIME FOR LINK CHANGE
+CTI2=-1000                    / COUNTER FOR OUTER TIMING LOOP
+
+*20
+TMP,    0                     / HANDY TEMPORARIES, NOT PRESERVED ACROSS CALLS
+TMP2,   0
+TMP3,   0
+AC,     0                     / CURRENT AC VALUE
+MQ,     0                     / CURRENT MQ VALUE
+LINK,   0                     / CURRENT LINK VALUE
+ACST,   0                     / AC STATE
+MQST,   0                     / MQ STATE
+COUNT2, 0                     / OUTER WAIT LOOP COUNTER
+CTAC,   1                     / AC CHANGE COUNTER
+CTMQ,   1                     / MQ CHANGE COUNTER
+CTLINK, 1                     / LINK CHANGE COUNTER
+ACCHG,  0                     / COUNTDOWN TO AC METHOD CHANGE
+MQCHG,  0                     / COUNTDOWN TO MQ METHOD CHANGE
+ACOWNM, 0                     / TRUE IF AC CONTROLS MQ
+SEED,   1234                  / CURRENT RANDOM NUMBER SEED
+ACACT,  0                     / CURRENT AC METHOD
+ACACTS, DOAC1                 / AC METHOD TABLE
+        DOAC2
+        DOAC3
+        0
+MQACT,  MQACTS                / CURRENT MQ METHOD
+MQACTS, DOMQ1                 / MQ METHOD TABLE
+        0
+*200
+
+/ MAIN PROGRAM
+
+START,  CLA CLL               / INITAILISE ALL LOOP COUNTERS
+        JMS INITAC
+        JMS INITMQ
+        JMS INITLK
+        CLA CLL
+        TAD (CHGCNT
+        DCA ACCHG
+        TAD (CHGCNT
+        DCA MQCHG
+        TAD (0007
+        DCA MQ
+        JMS REDOAC
+LOOP,   CLA CLL
+        OSR                   / READ SWITCH REGISTER
+        RAL
+        SZL
+        JMP I (7600           / QUIT IF TOP BIT SET IN SR
+        TAD (CTI2
+        DCA COUNT2            / RESET LOOP COUNTER
+        ISZ CTAC              / CHECK COUNTERS FOR AC, MQ AND LINK
+        JMP .+2
+        JMS DOAC
+        ISZ CTMQ
+        JMP .+2
+        JMS DOMQ
+        ISZ CTLINK
+        JMP .+2
+        JMS DOLINK
+LOOP1,  JMS WAIT              / WAIT LOOP
+        ISZ COUNT2
+        JMP LOOP1
+        JMP LOOP
+
+/ GENERIC RANDOMIZED COUNTER INITIALIZATION
+
+INITCT, 0
+        DCA TMP
+        JMS RAND
+        AND (17
+        CMA IAC
+        TAD TMP
+        JMP I INITCT
+
+/ INITAILISE AC COUNTDOWN
+
+INITAC, 0
+        CLA CLL
+        TAD (ICTAC
+        JMS INITCT
+        DCA CTAC
+        JMP I INITAC
+
+*400
+
+/ DO AC UPDATE
+
+DOAC,   0
+        JMS INITAC
+        ISZ ACCHG
+        JMP .+2
+        JMS REDOAC            / TIME TO RE-EVALUATE ALGORITHM
+        CLA CLL
+        TAD I ACACT
+        DCA TMP
+        JMS I TMP             / DISPATCH TO CURRENT ALGORITHM
+        JMP I DOAC
+
+/ RE-EVALATE AC ALGORITHM - CHOOSE AT RANDOM BETWEEN AVAILABLE
+/ ALGORITHMS. DO NOTHING IF WE COME UP WITH THE SAME ONE.
+
+REDOAC, 0
+        JMS RAND
+        AND (37
+        TAD (CHGCNT
+        DCA ACCHG
+        TAD (3
+        JMS BRAND
+        TAD (ACACTS
+        DCA TMP
+        TAD TMP
+        CMA IAC
+        TAD ACACT
+        SNA CLA
+        JMP I REDOAC          / RETURN IF WE HAVENT CHANGED ANYTHING
+        TAD TMP
+        DCA ACACT
+        TAD I ACACT
+        DCA TMP
+        IAC
+        JMS I TMP             / INITIALISE THE ALGORITHM BY CALLING WITH AC NON-ZERO
+        JMP I REDOAC
+
+/ AC ALGORITHM 1 - ROTATE A SMALL GROUP OF LIGHTS EITHER
+/ LEFT OR RIGHT
+
+DOAC1,  0
+        SNA
+        JMP DOAC12
+        JMS RAND              / COME HERE TO INITIALIZE
+        AND (1
+        DCA ACST              / CHOOSE DIRECTION
+        JMS STOWNM            / TELL MQ TO DO ITS OWN THING
+        CLA
+        TAD (3
+        JMS BRAND              / NOW CHOOSE SIZE (3, 4 OR 5)
+        CMA                    / NEGATE AND SUBTRACT 1
+        DCA TMP
+        CLA CLL
+        TAD (7000
+        ISZ TMP
+        JMP DOAC11
+        TAD (0400
+        ISZ TMP
+        JMP DOAC11
+        TAD (0200
+DOAC11, DCA AC
+DOAC12, CLA                   / COME HERE FOR NORMAL OPERATION
+        TAD ACST
+        SNA
+        JMP DOAC13
+        CLA                   / ROTATE RIGHT
+        TAD AC
+        JMS ROTR
+        JMP DOAC1X
+DOAC13, TAD AC                / ROTAYE LEFT
+        JMS ROTL
+DOAC1X, DCA AC
+        JMP I DOAC1
+
+*600
+
+/ AC ALGORITHM 2 - BUILD THEN DESTROY FULL AC ALTERNATELY
+/ IN EACH DIRECTION
+
+DOAC2,  0
+        SNA
+        JMP DOAC21
+        CLA CMA               / INITIALIZE - STATE:=0
+        DCA AC
+        DCA ACST
+        JMS STOWNM            / TELL MQ TO DO ITS OWN THING
+DOAC21, TAD ACST
+        SZA
+        JMP DOAC22            / STATE 0: ROLL OFF HIGH BITS TO RIGHT
+        TAD AC
+        CLL RAR
+        SZA
+        JMP DOAC29
+        ISZ ACST              / NO BITS LEFT, GO TO STATE 1
+        DCA AC
+DOAC22, CLA CMA               / -1
+        TAD ACST
+        SZA
+        JMP DOAC23
+        TAD AC                / STATE 1: ROLL ON LOW BITS FROM RIGHT
+        CLL CML RAL
+        DCA AC
+        TAD AC
+        IAC
+        SZA
+        JMP DOAC2X
+        CLA CMA               / ALL BITS SET - GO TO STATE 2
+        DCA AC
+        ISZ ACST
+DOAC23, CLA CLL CMA RAL       / -2
+        TAD ACST
+        SZA
+        JMP DOAC24
+        TAD AC                / STATE 2: ROLL OFF LOW BITS TO LEFT
+        CLL RAL
+        SZA
+        JMP DOAC29
+        ISZ ACST              / NO BITS LEFT - GOT TO STATE 3
+        CLA
+        JMP DOAC29
+DOAC24, CLA                   / STATE 3 (NO HIGHER STATES):
+        TAD AC
+        CLL CML RAR           / ROLL ON HIGH BITS FROM RIGHT
+        DCA AC
+        TAD AC
+        IAC
+        SZA
+        JMP DOAC2X
+        DCA ACST              / ALL BITS SET - BACK TO STATE 0
+        CLA CMA
+DOAC29, DCA AC
+DOAC2X, JMP I DOAC2
+
+*1000
+
+/ AC ALGORITHM 3 - ROTATE LIGHTS THROUGH AC AND MQ
+
+DOAC3,  0
+        SNA CLA
+        JMP DOAC31
+DOAC3Z, TAD (5
+        JMS BRAND             / INITIALISE - CHOOSE A WRAP POSITION
+        TAD (5
+        CMA IAC               / NEGATE WRAP POSITION
+        DCA TMP
+        IAC
+        JMS STOWNM            / TELL MQ CODE TO DO NOTHING
+        CLA CLL IAC
+DOAC30, CLL RAL
+        ISZ TMP
+        JMP DOAC30
+        DCA ACST              / SAVE MASK FOR WRAP POSITION
+        TAD (7000             / SET INITIAL VALUES
+        DCA AC
+        TAD (7
+        DCA MQ
+DOAC31, DCA TMP               / SET MQ CHANGE TO 0
+        TAD AC
+        JMS ROTR
+        DCA AC
+        TAD ACST
+        CLL RAR
+        AND AC
+        SNA
+        JMP DOAC3A
+        TAD ACST
+        CLL RAR
+        CMA
+        AND AC
+        DCA AC
+        TAD ACST
+        DCA TMP               / SET BIT IN MQ CHANGE
+DOAC3A, TAD MQ
+        JMS ROTL
+        DCA MQ
+        TAD MQ
+        AND ACST              / STILL HAVE ANY WRAP BITS?
+        SNA
+        JMP DOAC3B            / NO
+        CLL RAR               / YES - ADD INTO AC
+        TAD AC
+        DCA AC
+        TAD ACST
+        CMA
+        AND MQ                / AND REMOVE FROM MQ
+        DCA MQ
+DOAC3B, TAD MQ
+        TAD TMP               / ADD IN SHIFT FROM AC IF ANY
+        DCA MQ
+        JMP I DOAC3
+
+*1200
+
+/ MQ MANIPULATION
+
+/ RESET LOOP COUNTER
+
+INITMQ, 0
+        CLA CLL
+        TAD (ICTMQ
+        JMS INITCT
+        DCA CTMQ
+        JMP I INITMQ
+
+/ DO THE MANIPULATION
+
+DOMQ,   0
+        JMS INITMQ
+        ISZ MQCHG
+        JMP .+2
+        JMS REDOMQ            / TIME TO RE-EVALUATE ALGORITHM
+        CLA CLL
+        TAD ACOWNM            / DO NOTHING IF THE AC CODE IS ALSO RUNNING MQ
+        SZA
+        JMP I DOMQ
+        TAD I MQACT           / DISPATCH TO CURRENT ALGORITHM
+        DCA TMP
+        JMS I TMP             / DISPATCH TO CURRENT ALGORITHM
+        JMP I DOMQ
+
+/ MQ ALGORITHM 1 - ROTATE 3 LIGHTS EITHER LEFT OR RIGHT
+
+DOMQ1,  0
+        CLA CLL
+        TAD MQST
+        SNA
+        JMP DOMQ11
+        CLA                   / ROTATE RIGHT
+        TAD MQ
+        JMS ROTR
+        JMP DOMQ1X
+DOMQ11, TAD MQ                / ROTATE LEFT
+        JMS ROTL
+DOMQ1X, DCA MQ                / SAVE RESULT
+        JMP I DOMQ1
+
+/ RE-EVALUTE MQ ALGORITHM. THERES ONLY ONE ALGORITHM, BUT
+/ WE DECIDE WHETHER TO GO LEFT OR RIGHT THIS TIME
+
+REDOMQ, 0
+        JMS RAND
+        AND (37
+        TAD (MQCHCT
+        DCA MQCHG             / RESET RE-EVALUATION COUNTER
+        JMS RAND
+        AND (1
+        DCA MQST              / RANDOMLY SET LEFT OR RIGHT
+        TAD (7
+        DCA MQ                / LOAD INITIAL VALUE
+        JMP I REDOMQ
+
+/ SET/CLEAR ACOWNM IF AC 0/NON-0
+
+STOWNM, 0
+        SNA
+        JMP STOWN1
+        DCA ACOWNM
+        JMP I STOWNM
+STOWN1, DCA ACOWNM
+        JMS REDOMQ
+        JMP I STOWNM
+
+/ INITAILISE LINK LOOP COUNTER
+
+INITLK, 0
+        JMS RAND
+        AND (777
+        CMA IAC
+        TAD (ICTLK
+        DCA CTLINK
+        JMP I INITLK
+
+/ LINK ALGORITHM - RANDOMLY SET TO 0 OR 1
+
+DOLINK, 0
+        JMS INITLK
+        JMS RAND
+        AND (1
+        DCA LINK
+        JMP I DOLINK
+
+/ ROTATE AC LEFT
+
+ROTL,   0
+        CLL RAL
+        SZL
+        IAC
+        JMP I ROTL
+
+/ ROTATE AC RIGHT
+
+ROTR,   0
+        CLL RAR
+        SZL
+        TAD (4000
+        JMP I ROTR
+
+*1400
+        
+/ SIMPLE PSEUDO-RANDOM NUMBER GENERATOR
+
+RANDTM, 0
+RAND,   0
+        CLA CLL
+        TAD SEED
+        MQL
+        MUY                   / MULTIPLY BY...
+        (5671                 / ...SUITABLE PRIME
+        CLA
+        MQA
+RAND1,  IAC                   / ADD OFFSET
+        DCA RANDTM
+        TAD RANDTM
+        CMA IAC
+        TAD SEED              / SAME AS PREVIOUS VALUE?
+        SZA CLA
+        JMP RAND2
+        TAD RANDTM
+        JMP RAND1             / BE SURE VALUE CHANGES
+RAND2,  TAD RANDTM
+        DCA SEED
+        TAD SEED
+        BSW
+        JMP I RAND
+
+/ RETURN RANDOM NUMBER LESS THAN AC VALUE
+
+BRAND,  0
+        DCA TMP               / SAVE BOUND
+        TAD TMP
+        DCA TMP2
+BRAND1, CLA CMA               / -1
+        TAD TMP2              / MAKE CORRESPONDING MASK
+        AND TMP2              / REMOVE LOWEST BIT
+        SNA
+        JMP BRAND2
+        DCA TMP2
+        JMP BRAND1
+BRAND2, TAD TMP2              / HAVE JUST HIGHEST BIT - MAKE MASK
+        CLL RAL
+        TAD (-1
+        DCA TMP2
+BRAND3, JMS RAND              / GET RANDOM NUMBER
+        AND TMP2              / MASK OFF HIGH BITS
+        DCA TMP3
+        CLA IAC
+        TAD TMP3
+        CMA IAC
+        TAD TMP
+        SMA CLA
+        JMP .+2
+        JMP BRAND3            / NUMBER WAS TOO BIG, TRY AGAIN
+        TAD TMP3
+        JMP I BRAND           / NUMBER IN RANGE, RETURN IT
+
+*1600
+
+/ WAIT - PROGRAM SPENDS MOST OF ITS TIME HERE. FIRST SET UP
+/ THE AC, MQ AND LINK TO CURRENT VALUES, THEN SPIN FOR A WHILE
+
+WAIT,   0
+        CLA CLL
+        TAD (WAITCT
+        DCA TMP
+        TAD MQ
+        MQL                   / SET MQ
+        TAD LINK
+        SZA
+        JMP W1
+        CLA CLL
+        TAD AC                / SET AC
+        JMP W2
+W1,     CLA CLL               / NOW SET LINK TO STORED VALUE
+        TAD AC
+        CML
+W2,     ISZ TMP               / INNER WAIT LOOP
+        JMP W2
+        JMP I WAIT
+$

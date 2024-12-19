@@ -1,0 +1,474 @@
+*0
+
+muy=7405                      / eae multiply instucttion
+chgcnt=-150                   / average time to wait before changing display
+mqchct=-200                   / ditto for MQ display
+waitct=-40                    / times to run round wait loop
+ictac=-100                    / average time for AC movement
+ictmq=-150                    / averagetime for MQ movement
+ictlk=-200                    / average time for LINK change
+cti2=-1000                    / counter for outer timing loop
+
+*20
+tmp,    0                     / handy temporaries, not preserved across calls
+tmp2,   0
+tmp3,   0
+ac,     0                     / current AC value
+mq,     0                     / current MQ value
+link,   0                     / current LINK value
+acst,   0                     / AC state
+mqst,   0                     / MQ state
+count2, 0                     / outer wait loop counter
+ctac,   1                     / AC change counter
+ctmq,   1                     / MQ change counter
+ctlink, 1                     / LINK change counter
+acchg,  0                     / countdown to AC method change
+mqchg,  0                     / countdown to MQ method change
+acownm, 0                     / true if ac controls mq
+seed,   1234                  / current random number seed
+acact,  0                     / current AC method
+acacts, doac1                 / AC method table
+        doac2
+        doac3
+        0
+mqact,  mqacts                / current MQ method
+mqacts, domq1                 / MQ method table
+        0
+*200
+
+/ main program
+
+start,  cla cll               / initailise all loop counters
+        jms initac
+        jms initmq
+        jms initlk
+        cla cll
+        tad (chgcnt
+        dca acchg
+        tad (chgcnt
+        dca mqchg
+        tad (0007
+        dca mq
+        jms redoac
+loop,   cla cll
+        osr                   / read switch register
+        ral
+        szl
+        jmp i (7600           / quit if top bit set in SR
+        tad (cti2
+        dca count2            / reset loop counter
+        isz ctac              / check counters for AC, MQ and LINK
+        jmp .+2
+        jms doac
+        isz ctmq
+        jmp .+2
+        jms domq
+        isz ctlink
+        jmp .+2
+        jms dolink
+loop1,  jms wait              / wait loop
+        isz count2
+        jmp loop1
+        jmp loop
+
+/ generic randomized counter initialization
+
+initct, 0
+        dca tmp
+        jms rand
+        and (17
+        cma iac
+        tad tmp
+        jmp i initct
+
+/ initailise AC countdown
+
+initac, 0
+        cla cll
+        tad (ictac
+        jms initct
+        dca ctac
+        jmp i initac
+
+*400
+
+/ do AC update
+
+doac,   0
+        jms initac
+        isz acchg
+        jmp .+2
+        jms redoac            / time to re-evaluate algorithm
+        cla cll
+        tad i acact
+        dca tmp
+        jms i tmp             / dispatch to current algorithm
+        jmp i doac
+
+/ re-evalate AC algorithm - choose at random between available
+/ algorithms. Do nothing if we come up with the same one.
+
+redoac, 0
+        jms rand
+        and (37
+        tad (chgcnt
+        dca acchg
+        tad (3
+        jms brand
+        tad (acacts
+        dca tmp
+        tad tmp
+        cma iac
+        tad acact
+        sna cla
+        jmp i redoac          / return if we havent changed anything
+        tad tmp
+        dca acact
+        tad i acact
+        dca tmp
+        iac
+        jms i tmp             / initialise the algorithm by calling with AC non-zero
+        jmp i redoac
+
+/ AC algorithm 1 - rotate a small group of lights either
+/ left or right
+
+doac1,  0
+        sna
+        jmp doac12
+        jms rand              / come here to initialize
+        and (1
+        dca acst              / choose direction
+        jms stownm            / tell MQ to do its own thing
+        cla
+        tad (3
+        jms brand              / now choose size (3, 4 or 5)
+        cma                    / negate and subtract 1
+        dca tmp
+        cla cll
+        tad (7000
+        isz tmp
+        jmp doac11
+        tad (0400
+        isz tmp
+        jmp doac11
+        tad (0200
+doac11, dca ac
+doac12, cla                   / come here for normal operation
+        tad acst
+        sna
+        jmp doac13
+        cla                   / rotate right
+        tad ac
+        jms rotr
+        jmp doac1x
+doac13, tad ac                / rotaye left
+        jms rotl
+doac1x, dca ac
+        jmp i doac1
+
+*600
+
+/ AC algorithm 2 - build then destroy full AC alternately
+/ in each direction
+
+doac2,  0
+        sna
+        jmp doac21
+        cla cma               / initialize - state:=0
+        dca ac
+        dca acst
+        jms stownm            / tell MQ to do its own thing
+doac21, tad acst
+        sza
+        jmp doac22            / state 0: roll off high bits to right
+        tad ac
+        cll rar
+        sza
+        jmp doac29
+        isz acst              / no bits left, go to state 1
+        dca ac
+doac22, cla cma               / -1
+        tad acst
+        sza
+        jmp doac23
+        tad ac                / state 1: roll on low bits from right
+        cll cml ral
+        dca ac
+        tad ac
+        iac
+        sza
+        jmp doac2x
+        cla cma               / all bits set - go to state 2
+        dca ac
+        isz acst
+doac23, cla cll cma ral       / -2
+        tad acst
+        sza
+        jmp doac24
+        tad ac                / state 2: roll off low bits to left
+        cll ral
+        sza
+        jmp doac29
+        isz acst              / no bits left - got to state 3
+        cla
+        jmp doac29
+doac24, cla                   / state 3 (no higher states):
+        tad ac
+        cll cml rar           / roll on high bits from right
+        dca ac
+        tad ac
+        iac
+        sza
+        jmp doac2x
+        dca acst              / all bits set - back to state 0
+        cla cma
+doac29, dca ac
+doac2x, jmp i doac2
+
+*1000
+
+/ AC algorithm 3 - rotate lights through AC and MQ
+
+doac3,  0
+        sna cla
+        jmp doac31
+doac3z, tad (5
+        jms brand             / initialise - choose a wrap position
+        tad (5
+        cma iac               / negate wrap position
+        dca tmp
+        iac
+        jms stownm            / tell MQ code to do nothing
+        cla cll iac
+doac30, cll ral
+        isz tmp
+        jmp doac30
+        dca acst              / save mask for wrap position
+        tad (7000             / set initial values
+        dca ac
+        tad (7
+        dca mq
+doac31, dca tmp               / set MQ change to 0
+        tad ac
+        jms rotr
+        dca ac
+        tad acst
+        cll rar
+        and ac
+        sna
+        jmp doac3a
+        tad acst
+        cll rar
+        cma
+        and ac
+        dca ac
+        tad acst
+        dca tmp               / set bit in MQ change
+doac3a, tad mq
+        jms rotl
+        dca mq
+        tad mq
+        and acst              / still have any wrap bits?
+        sna
+        jmp doac3b            / no
+        cll rar               / yes - add into AC
+        tad ac
+        dca ac
+        tad acst
+        cma
+        and mq                / and remove from MQ
+        dca mq
+doac3b, tad mq
+        tad tmp               / add in shift from AC if any
+        dca mq
+        jmp i doac3
+
+*1200
+
+/ MQ manipulation
+
+/ reset loop counter
+
+initmq, 0
+        cla cll
+        tad (ictmq
+        jms initct
+        dca ctmq
+        jmp i initmq
+
+/ do the manipulation
+
+domq,   0
+        jms initmq
+        isz mqchg
+        jmp .+2
+        jms redomq            / time to re-evaluate algorithm
+        cla cll
+        tad acownm            / do nothing if the AC code is also running MQ
+        sza
+        jmp i domq
+        tad i mqact           / dispatch to current algorithm
+        dca tmp
+        jms i tmp             / dispatch to current algorithm
+        jmp i domq
+
+/ MQ algorithm 1 - rotate 3 lights either left or right
+
+domq1,  0
+        cla cll
+        tad mqst
+        sna
+        jmp domq11
+        cla                   / rotate right
+        tad mq
+        jms rotr
+        jmp domq1x
+domq11, tad mq                / rotate left
+        jms rotl
+domq1x, dca mq                / save result
+        jmp i domq1
+
+/ re-evalute MQ algorithm. Theres only one algorithm, but
+/ we decide whether to go left or right this time
+
+redomq, 0
+        jms rand
+        and (37
+        tad (mqchct
+        dca mqchg             / reset re-evaluation counter
+        jms rand
+        and (1
+        dca mqst              / randomly set left or right
+        tad (7
+        dca mq                / load initial value
+        jmp i redomq
+
+/ set/clear acownm if AC 0/non-0
+
+stownm, 0
+        sna
+        jmp stown1
+        dca acownm
+        jmp i stownm
+stown1, dca acownm
+        jms redomq
+        jmp i stownm
+
+/ initailise LINK loop counter
+
+initlk, 0
+        jms rand
+        and (777
+        cma iac
+        tad (ictlk
+        dca ctlink
+        jmp i initlk
+
+/ LINK algorithm - randomly set to 0 or 1
+
+dolink, 0
+        jms initlk
+        jms rand
+        and (1
+        dca link
+        jmp i dolink
+
+/ rotate AC left
+
+rotl,   0
+        cll ral
+        szl
+        iac
+        jmp i rotl
+
+/ rotate AC right
+
+rotr,   0
+        cll rar
+        szl
+        tad (4000
+        jmp i rotr
+
+*1400
+        
+/ simple pseudo-random number generator
+
+randtm, 0
+rand,   0
+        cla cll
+        tad seed
+        mql
+        muy                   / multiply by...
+        (5671                 / ...suitable prime
+        cla
+        mqa
+rand1,  iac                   / add offset
+        dca randtm
+        tad randtm
+        cma iac
+        tad seed              / same as previous value?
+        sza cla
+        jmp rand2
+        tad randtm
+        jmp rand1             / be sure value changes
+rand2,  tad randtm
+        dca seed
+        tad seed
+        bsw
+        jmp i rand
+
+/ return random number less than AC value
+
+brand,  0
+        dca tmp               / save bound
+        tad tmp
+        dca tmp2
+brand1, cla cma               / -1
+        tad tmp2              / make corresponding mask
+        and tmp2              / remove lowest bit
+        sna
+        jmp brand2
+        dca tmp2
+        jmp brand1
+brand2, tad tmp2              / have just highest bit - make mask
+        cll ral
+        tad (-1
+        dca tmp2
+brand3, jms rand              / get random number
+        and tmp2              / mask off high bits
+        dca tmp3
+        cla iac
+        tad tmp3
+        cma iac
+        tad tmp
+        sma cla
+        jmp .+2
+        jmp brand3            / number was too big, try again
+        tad tmp3
+        jmp i brand           / number in range, return it
+
+*1600
+
+/ wait - program spends most of its time here. First set up
+/ the AC, MQ and LINK to current values, then spin for a while
+
+wait,   0
+        cla cll
+        tad (waitct
+        dca tmp
+        tad mq
+        mql                   / set MQ
+        tad link
+        sza
+        jmp w1
+        cla cll
+        tad ac                / set AC
+        jmp w2
+w1,     cla cll               / now set LINK to stored value
+        tad ac
+        cml
+w2,     isz tmp               / inner wait loop
+        jmp w2
+        jmp i wait
+$
