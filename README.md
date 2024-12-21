@@ -11,6 +11,7 @@ upper case suitable for downloading to OS/8 for assembly.
 There are also two little Python utilities:
 
 to8.py - convert a lowercase, Unix-format file to uppercase and PDP-8 format (CR/LF line termination)
+
 format-pal.py - adjust columns to produce nice-looking code
 
 To move the program to a PiDP8 and run it:
